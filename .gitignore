@@ -2,3 +2,4 @@ __pycache__/
 *.wav
 *.onnx
 .env
+jarvis_memory.json
