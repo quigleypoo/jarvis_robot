@@ -34,6 +34,7 @@ def save_conversation_memory(memory_history):
         json.dump(trimmed_memory, f, indent=2)
 
 def encode_image_to_base64(image_path):
+    """Converts a local physical image file into a text string for the cloud API."""
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
@@ -61,7 +62,7 @@ def process_command(user_speech):
     if any(k in command_clean for k in ["open camera", "activate lenses", "turn on video", "open cameras"]):
         print("🤖 [JARVIS IS INITIALIZING OPTICAL CHANNELS]")
         import vision
-        vision.activate_camera()  # Opens floating live camera stream instantly
+        vision.activate_camera()  
         return "CONVERSATION", "Optical array initialization complete. Lenses are broadcasting, sir."
 
     # ─── ROUTE 2: MULTIMODAL SIGHT SNAPSHOT SCAN ───
@@ -78,8 +79,9 @@ def process_command(user_speech):
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
             ]})
             try:
+                # FIX: Upgraded to Groq's official high-performance Llama 4 Vision engine
                 response = client.chat.completions.create(
-                    model="llama-3.2-11b-vision-preview",
+                    model="meta-llama/llama-4-scout-17b-16e-instruct", 
                     messages=messages,
                     max_tokens=120
                 )
@@ -93,6 +95,7 @@ def process_command(user_speech):
             except Exception as e:
                 if os.path.exists(image_name):
                     os.remove(image_name)
+                print(f"⚠️ INTERNAL VISION ERROR CODE: {e}")
                 return "CONVERSATION", "I'm having trouble compiling the image telemetry, sir."
 
     # ─── ROUTE 3: ISOLATED HARDWARE CLOCK TOOL ───
@@ -103,11 +106,10 @@ def process_command(user_speech):
 
     # ─── ROUTE 4: ISOLATED LIVE DUCKDUCKGO WEB BROWSER ───
     if any(k in command_clean for k in ["weather", "price of", "stock price", "news about", "tomorrow's forecast"]):
-        # Run internet queries cleanly on our side first
         web_facts = search_the_web(command_clean)
         user_speech = f"{user_speech} (Context Notes: Live internet query data snippets gathered for you:\n{web_facts})"
 
-    # ─── ROUTE 5: STANDARD CHAT PIPELINE (IMMUNE TO 400 ERRORS) ───
+    # ─── ROUTE 5: STANDARD CHAT PIPELINE ───
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(past_exchanges)
     messages.append({"role": "user", "content": user_speech})
@@ -120,7 +122,6 @@ def process_command(user_speech):
         )
         ai_reply = response.choices[0].message.content
         
-        # Save exchange history cleanly to our rolling memory
         past_exchanges.append({"role": "user", "content": user_speech.split("(Context Notes:")[0].strip()})
         past_exchanges.append({"role": "assistant", "content": ai_reply})
         save_conversation_memory(past_exchanges)
