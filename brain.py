@@ -37,32 +37,35 @@ def encode_image_to_base64(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-def get_current_system_time():
-    """Returns the precise local system date and time from the motherboard clock."""
-    return datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
-
 def search_the_web(query: str) -> str:
     """Browses the live internet to get real-time facts, weather, news, or item prices."""
     try:
         print(f"🌐 [JARVIS LIVE SEARCHING THE WEB FOR: '{query}']")
         with DDGS() as ddgs:
-            results = [r for r in ddgs.text(query, max_results=3)]
+            results = [r for r in ddgs.text(query, max_results=2)]
             if results:
                 return "\n".join([f"Source: {r['title']} - {r['body']}" for r in results])
     except Exception as e:
-        return f"Internet search link error: {str(e)}"
-    return "No live data found on the web for this query, sir."
+        return f"Search link error: {str(e)}"
+    return "No live data found, sir."
 
 def process_command(user_speech):
-    """Processes queries, checking if the cloud needs to search the web or read the hardware clock."""
+    """Routes voice queries cleanly by isolating tools from the conversational text loop."""
     if not client:
         return "CONVERSATION", "My cloud core interface link is offline, sir."
         
     command_clean = user_speech.lower().strip()
     past_exchanges = load_conversation_memory()
     
-    # ─── CAMERA PROTOCOLS ───
-    if any(keyword in command_clean for keyword in ["scan", "identify", "what is this", "look at"]):
+    # ─── ROUTE 1: HARDWARE CAMERA LIVE REFRESH WINDOW ───
+    if any(k in command_clean for k in ["open camera", "activate lenses", "turn on video", "open cameras"]):
+        print("🤖 [JARVIS IS INITIALIZING OPTICAL CHANNELS]")
+        import vision
+        vision.activate_camera()  # Opens floating live camera stream instantly
+        return "CONVERSATION", "Optical array initialization complete. Lenses are broadcasting, sir."
+
+    # ─── ROUTE 2: MULTIMODAL SIGHT SNAPSHOT SCAN ───
+    if any(k in command_clean for k in ["scan", "identify", "what is this", "look at"]):
         print("🤖 [JARVIS TRIGGERING MULTIMODAL SIGHT SENSORS]")
         import vision
         image_name = "target_sight.jpg"
@@ -78,7 +81,7 @@ def process_command(user_speech):
                 response = client.chat.completions.create(
                     model="llama-3.2-11b-vision-preview",
                     messages=messages,
-                    max_tokens=100
+                    max_tokens=120
                 )
                 if os.path.exists(image_name):
                     os.remove(image_name)
@@ -91,87 +94,37 @@ def process_command(user_speech):
                 if os.path.exists(image_name):
                     os.remove(image_name)
                 return "CONVERSATION", "I'm having trouble compiling the image telemetry, sir."
-                
-    # ─── CORE CHAT WITH DUAL HARDWARE & WEB TOOLS ───
+
+    # ─── ROUTE 3: ISOLATED HARDWARE CLOCK TOOL ───
+    if any(k in command_clean for k in ["time", "what time", "current date", "day is it"]):
+        print("🤖 [JARVIS READING PHYSICAL SYSTEM CLOCK ARRAY]")
+        real_time = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
+        user_speech = f"{user_speech} (Context Notes: The hardware motherboard clock reads exactly: {real_time})"
+
+    # ─── ROUTE 4: ISOLATED LIVE DUCKDUCKGO WEB BROWSER ───
+    if any(k in command_clean for k in ["weather", "price of", "stock price", "news about", "tomorrow's forecast"]):
+        # Run internet queries cleanly on our side first
+        web_facts = search_the_web(command_clean)
+        user_speech = f"{user_speech} (Context Notes: Live internet query data snippets gathered for you:\n{web_facts})"
+
+    # ─── ROUTE 5: STANDARD CHAT PIPELINE (IMMUNE TO 400 ERRORS) ───
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(past_exchanges)
     messages.append({"role": "user", "content": user_speech})
-    
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_system_time",
-                "description": "Call this whenever the user asks for the current time, date, day, or temporal context.",
-                "parameters": {"type": "object", "properties": {}}
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search_the_web",
-                "description": "Call this whenever the user asks about live prices, weather forecasts, news, or any real-time data.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "The target search query keywords to browse on the web."}
-                    },
-                    "required": ["query"]
-                }
-            }
-        }
-    ]
     
     try:
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=messages,
-            tools=tools,
-            tool_choice="auto",
-            max_tokens=100
+            max_tokens=120
         )
+        ai_reply = response.choices[0].message.content
         
-        # FIX 1: Re-added the missing index bracket tracker right here
-        response_message = response.choices[0].message
-        tool_calls = response_message.tool_calls
-        
-        if tool_calls:
-            messages.append(response_message)
-            
-            for tool_call in tool_calls:
-                t_name = tool_call.function.name
-                
-                if t_name == "get_current_system_time":
-                    print("🤖 [JARVIS READING PHYSICAL SYSTEM CLOCK ARRAY]")
-                    tool_result = get_current_system_time()
-                elif t_name == "search_the_web":
-                    t_args = json.loads(tool_call.function.arguments)
-                    search_query = t_args.get("query")
-                    tool_result = search_the_web(search_query)
-                
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": t_name,
-                    "content": tool_result
-                })
-            
-            final_response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=messages,
-                max_tokens=100
-            )
-            # FIX 2: Added the index bracket to the secondary response call too
-            ai_reply = final_response.choices[0].message.content
-            past_exchanges.append({"role": "user", "content": user_speech})
-            past_exchanges.append({"role": "assistant", "content": ai_reply})
-            save_conversation_memory(past_exchanges)
-            return "CONVERSATION", ai_reply
-                    
-        ai_reply = response_message.content
-        past_exchanges.append({"role": "user", "content": user_speech})
+        # Save exchange history cleanly to our rolling memory
+        past_exchanges.append({"role": "user", "content": user_speech.split("(Context Notes:")[0].strip()})
         past_exchanges.append({"role": "assistant", "content": ai_reply})
         save_conversation_memory(past_exchanges)
+        
         return "CONVERSATION", ai_reply
 
     except Exception as e:
