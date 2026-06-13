@@ -3,27 +3,28 @@ from langchain_ollama import ChatOllama
 from langchain_core.tools import tool
 from langchain_core.messages import ToolMessage
 
-# TOOL 1: File Reading capability (Ruggedized)
+# TOOL 1: File Reading capability (Ruggedized with UTF-8)
 @tool
 def read_project_file(filename: str = "jarvis_prompt.txt") -> str:
     """Reads the contents of a local project script file (e.g., 'brain.py', 'main.py')."""
     clean_name = os.path.basename(str(filename))
     if os.path.exists(clean_name):
-        with open(clean_name, "r") as f:
+        # FIX: Added encoding="utf-8" to safely read files containing emojis
+        with open(clean_name, "r", encoding="utf-8") as f:
             return f.read()
     return f"Error: File '{clean_name}' not found."
 
-# TOOL 2: Self-Modification file writing capability (Ruggedized)
+# TOOL 2: Self-Modification file writing capability (Ruggedized with UTF-8)
 @tool
 def modify_project_file(filename: str, new_code_content: str) -> str:
     """Completely overwrites a local project script file with new, updated python code."""
     clean_name = os.path.basename(str(filename))
     test_filename = f"test_{clean_name}"
     try:
-        with open(test_filename, "w") as f:
+        with open(test_filename, "w", encoding="utf-8") as f:
             f.write(new_code_content)
         compile(new_code_content, test_filename, 'exec')
-        with open(clean_name, "w") as f:
+        with open(clean_name, "w", encoding="utf-8") as f:
             f.write(new_code_content)
         if os.path.exists(test_filename):
             os.remove(test_filename)
@@ -51,7 +52,7 @@ llm = ChatOllama(model="llama3.2:1b", temperature=0.1).bind_tools([
 
 PROMPT_FILE = "jarvis_prompt.txt"
 if os.path.exists(PROMPT_FILE):
-    with open(PROMPT_FILE, "r") as f:
+    with open(PROMPT_FILE, "r", encoding="utf-8") as f:
         SYSTEM_PROMPT = f.read()
 else:
     SYSTEM_PROMPT = "You are Jarvis, a helpful British AI assistant."
@@ -78,7 +79,6 @@ def process_command(user_speech):
                 print(f"🤖 [JARVIS IS ACCESSING INTERNAL SYSTEM MATRIX: {tool_name}]")
                 
                 result = ""
-                # FIX: We use .invoke(tool_args) instead of calling the tool object directly
                 if tool_name == "read_project_file":
                     target_file = tool_args.get("filename", "jarvis_prompt.txt")
                     result = read_project_file.invoke({"filename": target_file})
