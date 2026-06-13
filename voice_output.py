@@ -1,47 +1,44 @@
 import os
-import wave
-import numpy as np
+import sounddevice as sd
 
+# Safely connect to our local Kokoro ONNX execution engine
 try:
-    from piper import PiperVoice
-except ImportError:
-    PiperVoice = None
+    from kokoro_onnx import KokoroOnnx
+    # Updated file path to look for the correct 'voices.bin' filename asset
+    if os.path.exists("kokoro-v0_19.onnx") and os.path.exists("voices.bin"):
+        kokoro = KokoroOnnx("kokoro-v0_19.onnx", "voices.bin")
+    else:
+        kokoro = None
+        print("⚠️ Kokoro file assets are missing from the folder directory.")
+except Exception as err:
+    kokoro = None
+    print(f"⚠️ NEURAL AUDIO LOAD ERROR: {err}")
 
 def speak(text):
-    """Directly runs the downloaded ONNX model via the native Python Piper library."""
+    """Generates a highly realistic local British cinematic voice completely for free."""
     print(f"Jarvis: {text}")
     
-    model_path = "en_GB-jarvis-medium.onnx"
-    output_wav = "jarvis_response.wav"
-    
-    if PiperVoice and os.path.exists(model_path):
+    if kokoro:
         try:
-            voice = PiperVoice.load(model_path)
+            # We command Kokoro to generate audio using the 'en_GB-alan' British profile
+            # speed=0.88 slows him down by 12% to match Paul Bettany's cinematic cadence
+            samples, sample_rate = kokoro.create(
+                text, 
+                voice="en_GB-alan", 
+                speed=0.88
+            )
             
-            with wave.open(output_wav, "wb") as wav_file:
-                voice.synthesize(text, wav_file, length_scale=1.15, noise_scale=0.7)
-            
-            if os.name == 'nt':
-                import winsound
-                winsound.PlaySound(output_wav, winsound.SND_FILENAME)
-            else:
-                os.system(f"aplay {output_wav}")
-                
-            if os.path.exists(output_wav):
-                os.remove(output_wav)
+            # Stream the generated audio arrays straight over your speakers
+            sd.play(samples, sample_rate)
+            sd.wait()  # Hold the script loop until Jarvis finishes speaking his sentence
             return
-            
         except Exception as e:
-            print(f"⚠️ Native Piper processing failed: {e}. Falling back to default narrator.")
+            print(f"⚠️ Kokoro generation stuttered: {e}. Dropping back to system default.")
 
+    # Fallback Protection: Keeps your workspace running if files are misplaced
     try:
         import pyttsx3
         engine = pyttsx3.init()
-        voices = engine.getProperty('voices')
-        for voice in voices:
-            if "british" in voice.name.lower() or "male" in voice.name.lower():
-                engine.setProperty('voice', voice.id)
-                break
         engine.setProperty('rate', 165)
         engine.say(text)
         engine.runAndWait()
