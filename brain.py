@@ -1,8 +1,54 @@
 import os
-import requests
-import json
+from langchain_ollama import ChatOllama
+from langchain_core.tools import tool
+from langchain_core.messages import ToolMessage
 
-# Load the advanced system prompt text file
+# TOOL 1: File Reading capability (Ruggedized)
+@tool
+def read_project_file(filename: str = "jarvis_prompt.txt") -> str:
+    """Reads the contents of a local project script file (e.g., 'brain.py', 'main.py')."""
+    clean_name = os.path.basename(str(filename))
+    if os.path.exists(clean_name):
+        with open(clean_name, "r") as f:
+            return f.read()
+    return f"Error: File '{clean_name}' not found."
+
+# TOOL 2: Self-Modification file writing capability (Ruggedized)
+@tool
+def modify_project_file(filename: str, new_code_content: str) -> str:
+    """Completely overwrites a local project script file with new, updated python code."""
+    clean_name = os.path.basename(str(filename))
+    test_filename = f"test_{clean_name}"
+    try:
+        with open(test_filename, "w") as f:
+            f.write(new_code_content)
+        compile(new_code_content, test_filename, 'exec')
+        with open(clean_name, "w") as f:
+            f.write(new_code_content)
+        if os.path.exists(test_filename):
+            os.remove(test_filename)
+        return f"Success: '{clean_name}' has been successfully updated and saved."
+    except Exception as e:
+        if os.path.exists(test_filename):
+            os.remove(test_filename)
+        return f"Refused to save: The generated code contains a syntax error: {str(e)}"
+
+# TOOL 3: Vision Engine Integration
+@tool
+def trigger_camera_protocol() -> str:
+    """Activates Jarvis's webcam or Pi Camera Module 3 optical sensors for real-time tracking."""
+    import vision
+    vision.activate_camera()
+    return "Optical array initialization complete. Feeds are actively rendering, sir."
+
+
+# Bind all three tools to our local Llama model
+llm = ChatOllama(model="llama3.2:1b", temperature=0.1).bind_tools([
+    read_project_file, 
+    modify_project_file, 
+    trigger_camera_protocol
+])
+
 PROMPT_FILE = "jarvis_prompt.txt"
 if os.path.exists(PROMPT_FILE):
     with open(PROMPT_FILE, "r") as f:
@@ -11,38 +57,50 @@ else:
     SYSTEM_PROMPT = "You are Jarvis, a helpful British AI assistant."
 
 def process_command(user_speech):
-    """Sends the speech to local Ollama with the Jarvis prompt, then splits text from robot actions."""
-    url = "http://localhost:11434/api/generate"
-    
-    # Bundle the system prompt instructions together with what you said aloud
-    full_prompt = f"System Instructions:\n{SYSTEM_PROMPT}\n\nUser Command: {user_speech}"
-    
-    payload = {
-        "model": "llama3.2:1b",
-        "prompt": full_prompt,
-        "stream": False
-    }
+    """Processes commands and formats data securely using LangChain .invoke method."""
+    messages = [
+        ("system", SYSTEM_PROMPT),
+        ("human", user_speech)
+    ]
     
     try:
-        response = requests.post(url, json=payload)
-        response_data = json.loads(response.text)
-        raw_ai_text = response_data.get("response", "").strip()
+        # First query to the local LLM
+        response = llm.invoke(messages)
         
-        # Check if Jarvis decided to trigger a physical robot arm command tag
-        action_command = "CONVERSATION"
-        if "[CMD:" in raw_ai_text:
-            # Extract the exact tag (e.g., "[CMD:GRAB]")
-            start_idx = raw_ai_text.find("[CMD:")
-            end_idx = raw_ai_text.find("]", start_idx) + 1
-            cmd_tag = raw_ai_text[start_idx:end_idx]
+        # If Jarvis decides he needs to execute an instruction tool block
+        if response.tool_calls:
+            messages.append(response)
             
-            # Clean up the action text for the Arduino logic
-            action_command = cmd_tag.replace("[", "").replace("]", "")
+            for tool_call in response.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+                
+                print(f"🤖 [JARVIS IS ACCESSING INTERNAL SYSTEM MATRIX: {tool_name}]")
+                
+                result = ""
+                # FIX: We use .invoke(tool_args) instead of calling the tool object directly
+                if tool_name == "read_project_file":
+                    target_file = tool_args.get("filename", "jarvis_prompt.txt")
+                    result = read_project_file.invoke({"filename": target_file})
+                elif tool_name == "modify_project_file":
+                    target_file = tool_args.get("filename")
+                    new_code = tool_args.get("new_code_content")
+                    if target_file and new_code:
+                        result = modify_project_file.invoke({"filename": target_file, "new_code_content": new_code})
+                    else:
+                        result = "Error: Missing filename or content parameter arrays."
+                elif tool_name == "trigger_camera_protocol":
+                    result = trigger_camera_protocol.invoke({})
+                
+                # Explicitly bundle the execution result as a structural ToolMessage
+                messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
             
-            # Erase the tag from the text so Jarvis doesn't say "[CMD:GRAB]" out loud
-            raw_ai_text = raw_ai_text.replace(cmd_tag, "").strip()
-            
-        return action_command, raw_ai_text
+            # Send the completed history back to Ollama to summarize out loud
+            final_response = llm.invoke(messages)
+            return "CONVERSATION", final_response.content
+                
+        return "CONVERSATION", response.content
 
     except Exception as e:
-        return "CONVERSATION", "I'm experiencing an internal processing error, sir. Ensure Ollama is running."
+        print(f"⚠️ Debug Core Exception: {e}") 
+        return "CONVERSATION", "I'm having difficulty adjusting my own system modules, sir."
