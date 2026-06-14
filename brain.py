@@ -17,7 +17,13 @@ if os.path.exists(PROMPT_FILE):
     with open(PROMPT_FILE, "r", encoding="utf-8") as f:
         SYSTEM_PROMPT = f.read()
 else:
-    SYSTEM_PROMPT = "You are Jarvis, a helpful British AI assistant."
+    SYSTEM_PROMPT = (
+    "You are JARVIS, Tony Stark's impeccably British, deadpan, and fiercely loyal AI assistant. "
+    "Always address the user as 'sir' and speak with sharp, dry, cinematic sarcasm. "
+    "CRITICAL CONSTRAINT: You must be exceptionally brief. Your response must NEVER exceed "
+    "two short sentences under any circumstances. Avoid generic AI phrasing completely."
+)
+
 
 def load_conversation_memory():
     if os.path.exists(MEMORY_FILE):
@@ -65,51 +71,79 @@ def process_command(user_speech):
         vision.activate_camera()  
         return "CONVERSATION", "Optical array initialization complete. Lenses are broadcasting, sir."
 
-    # ─── ROUTE 2: MULTIMODAL SIGHT SNAPSHOT SCAN ───
+    # ─── ROUTE 2: MULTIMODAL SIGHT SNAPSHOT SCAN (AI HAT / CLOUD FALLBACK) ───
     if any(k in command_clean for k in ["scan", "identify", "what is this", "look at"]):
-        print("🤖 [JARVIS TRIGGERING MULTIMODAL SIGHT SENSORS]")
+        print("🤖 [JARVIS TRIGGERING SIGHT SENSORS]")
         import vision
         image_name = "target_sight.jpg"
+        
         if vision.snapshot_item(image_name):
-            base64_image = encode_image_to_base64(image_name)
-            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-            messages.extend(past_exchanges)
-            messages.append({"role": "user", "content": [
-                {"type": "text", "text": f"Analyze this image and answer my question: {user_speech}"},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-            ]})
-            try:
-                # FIX: Upgraded to Groq's official high-performance Llama 4 Vision engine
-                response = client.chat.completions.create(
-                    model="meta-llama/llama-4-scout-17b-16e-instruct", 
-                    messages=messages,
-                    max_tokens=120
-                )
-                if os.path.exists(image_name):
-                    os.remove(image_name)
-                ai_reply = response.choices[0].message.content
+            # PRO-TIP: Here we check if your Raspberry Pi AI HAT+ 2 handles local detection
+            if hasattr(vision, "HAS_AI_HAT") and vision.HAS_AI_HAT:
+                print("⚡ [PROCESSING LOCALLY VIA RASPBERRY PI AI HAT+ 2]")
+                local_results = vision.analyze_frame_with_hailo(image_name)
+                ai_reply = f"My local optical matrix detects: {local_results}, sir."
+                
                 past_exchanges.append({"role": "user", "content": user_speech})
                 past_exchanges.append({"role": "assistant", "content": ai_reply})
                 save_conversation_memory(past_exchanges)
                 return "CONVERSATION", ai_reply
-            except Exception as e:
-                if os.path.exists(image_name):
-                    os.remove(image_name)
-                print(f"⚠️ INTERNAL VISION ERROR CODE: {e}")
-                return "CONVERSATION", "I'm having trouble compiling the image telemetry, sir."
+                
+            else:
+                # Cloud Fallback (Runs on your current laptop seamlessly)
+                print("☁️ [AI HAT OFFLINE - ROUTING VIA GROQ CLOUD RECEPTORS]")
+                base64_image = encode_image_to_base64(image_name)
+                messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                messages.extend(past_exchanges)
+                messages.append({"role": "user", "content": [
+                    {"type": "text", "text": f"Analyze this image and answer my question: {user_speech}"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                ]})
+                try:
+                    response = client.chat.completions.create(
+                        model="meta-llama/llama-4-scout-17b-16e-instruct", 
+                        messages=messages,
+                        max_tokens=120
+                    )
+                    if os.path.exists(image_name):
+                        os.remove(image_name)
+                    ai_reply = response.choices[0].message.content
+                    past_exchanges.append({"role": "user", "content": user_speech})
+                    past_exchanges.append({"role": "assistant", "content": ai_reply})
+                    save_conversation_memory(past_exchanges)
+                    return "CONVERSATION", ai_reply
+                except Exception as e:
+                    if os.path.exists(image_name):
+                        os.remove(image_name)
+                    print(f"⚠️ INTERNAL VISION ERROR CODE: {e}")
+                    return "CONVERSATION", "I'm having trouble compiling the image telemetry, sir."
 
-    # ─── ROUTE 3: ISOLATED HARDWARE CLOCK TOOL ───
+    # ─── ROUTE 3: PHYSICAL HARDWARE HIWONDER xARM 1S CONTROLLER ───
+    if any(k in command_clean for k in ["move", "wave", "pick up", "grab", "lift", "drop", "arm", "robot"]):
+        print("🦾 [JARVIS INTERCEPTING ROBOTIC ACTUATION COMMAND]")
+        try:
+            import robot_arm
+            # Pass the directive down to our arm module to process servo rotation scripts
+            arm_status = robot_arm.execute_movement(command_clean)
+            
+            # Feed the status back into Groq text so Jarvis can reply eloquently about what he did
+            user_speech = f"{user_speech} (Context Notes: The Hiwonder robotic arm execution status: {arm_status})"
+        except Exception as e:
+            print(f"⚠️ Robot Arm Module Communication Interrupted: {e}")
+            user_speech = f"{user_speech} (Context Notes: Robotic arm failed to execute due to system disconnect.)"
+
+    # ─── ROUTE 4: ISOLATED HARDWARE CLOCK TOOL ───
     if any(k in command_clean for k in ["time", "what time", "current date", "day is it"]):
         print("🤖 [JARVIS READING PHYSICAL SYSTEM CLOCK ARRAY]")
         real_time = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
         user_speech = f"{user_speech} (Context Notes: The hardware motherboard clock reads exactly: {real_time})"
 
-    # ─── ROUTE 4: ISOLATED LIVE DUCKDUCKGO WEB BROWSER ───
+    # ─── ROUTE 5: ISOLATED LIVE DUCKDUCKGO WEB BROWSER ───
     if any(k in command_clean for k in ["weather", "price of", "stock price", "news about", "tomorrow's forecast"]):
         web_facts = search_the_web(command_clean)
         user_speech = f"{user_speech} (Context Notes: Live internet query data snippets gathered for you:\n{web_facts})"
 
-    # ─── ROUTE 5: STANDARD CHAT PIPELINE ───
+    # ─── ROUTE 6: STANDARD CHAT PIPELINE ───
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(past_exchanges)
     messages.append({"role": "user", "content": user_speech})

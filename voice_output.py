@@ -1,46 +1,59 @@
 import os
+import numpy as np
 import sounddevice as sd
 
-# Safely connect to our local Kokoro ONNX execution engine
+# ─── NEURAL SYNTHESIS SYSTEM ARCHITECTURE ───
 try:
     from kokoro_onnx import KokoroOnnx
-    # Updated file path to look for the correct 'voices.bin' filename asset
+    # Validates that your offline weight matrix files are stored in the project directory
     if os.path.exists("kokoro-v0_19.onnx") and os.path.exists("voices.bin"):
         kokoro = KokoroOnnx("kokoro-v0_19.onnx", "voices.bin")
     else:
         kokoro = None
-        print("⚠️ Kokoro file assets are missing from the folder directory.")
+        print("⚠️ Kokoro weight assets are missing from the current folder directory.")
 except Exception as err:
     kokoro = None
     print(f"⚠️ NEURAL AUDIO LOAD ERROR: {err}")
 
 def speak(text):
-    """Generates a highly realistic local British cinematic voice completely for free."""
+    """Generates an offline British voice using Kokoro, with automatic fallback structures."""
     print(f"Jarvis: {text}")
     
     if kokoro:
         try:
-            # We command Kokoro to generate audio using the 'en_GB-alan' British profile
-            # speed=0.88 slows him down by 12% to match Paul Bettany's cinematic cadence
+            # Generate local synthetic audio arrays using the Alan British voice profile
             samples, sample_rate = kokoro.create(
                 text, 
                 voice="en_GB-alan", 
                 speed=0.88
             )
             
-            # Stream the generated audio arrays straight over your speakers
+            # HARDWARE FIX: Ensure numpy float32 conversion before pushing data to your USB speakers
+            samples = np.array(samples, dtype=np.float32)
+            
+            # Prevent audio stream collision by cleanly stopping any leftover audio processes
+            sd.stop() 
+            
+            # Stream the processed neural data blocks smoothly
             sd.play(samples, sample_rate)
             sd.wait()  # Hold the script loop until Jarvis finishes speaking his sentence
             return
         except Exception as e:
             print(f"⚠️ Kokoro generation stuttered: {e}. Dropping back to system default.")
 
-    # Fallback Protection: Keeps your workspace running if files are misplaced
+    # FALLBACK PROTECTION: Keeps your workspace running if files are misplaced
     try:
         import pyttsx3
         engine = pyttsx3.init()
-        engine.setProperty('rate', 165)
+        # Find a local British system voice if available
+        voices = engine.getProperty('voices')
+        for v in voices:
+            if "GB" in v.id or "british" in v.name.lower():
+                engine.setProperty('voice', v.id)
+                break
+        engine.setProperty('rate', 160)
         engine.say(text)
         engine.runAndWait()
     except Exception:
+        # Final emergency safeguard: print statements continue even if audio systems drop entirely
         pass

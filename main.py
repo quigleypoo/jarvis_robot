@@ -10,7 +10,7 @@ def start_jarvis():
     # Track the exact timestamp of when you last spoke to him
     last_interaction_time = 0
     
-    # UPDATED: The listening window is now set to 30.0 seconds
+    # The listening window is set to 30.0 seconds
     TIMEOUT_LIMIT = 30.0
     
     voice_output.speak("Systems fully loaded. I am online and listening, sir.")
@@ -38,7 +38,7 @@ def start_jarvis():
             # SCENARIO 2: Jarvis is already awake, so we process whatever you say immediately
             elif is_awake:
                 print("💬 Session Active: Processing open voice stream...")
-                last_interaction_time = current_time # Reset the timer because you are talking
+                last_interaction_time = current_time  # Reset the timer because you are talking
                 clean_command = text_lower
                 
             # SCENARIO 3: Jarvis is asleep, and you didn't say his name (Ignore it)
@@ -49,12 +49,13 @@ def start_jarvis():
             print(f"🧠 Sending command to Jarvis Brain: '{clean_command}'")
             action, speech_response = brain.process_command(clean_command)
             
-            # Speak out loud
+            # Speak out loud via the USB speaker
             voice_output.speak(speech_response)
             
-            # Log any structural physical robotic movements
+            # --- RASPBERRY PI HARDWARE STATUS LOGGING ---
             if action != "CONVERSATION":
-                print(f"⚙️ EXECUTING ARDUINO HARDWARE COMMAND -> {action}")
+                # Updated to match your physical hardware architecture
+                print(f"⚙️ EXECUTING PHYSICAL RASPBERRY PI MOTOR ACTIONS -> {action}")
                 
         # --- THE CONVERSATIONAL TIMEOUT ENGINE ---
         # If Jarvis is awake, check if the 30-second countdown has run out
