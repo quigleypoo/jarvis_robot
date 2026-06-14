@@ -1,167 +1,145 @@
-import os
+import serial
+import speech_recognition as sr
+import pyttsx3
+import requests
 import json
-import base64
-from datetime import datetime
-from dotenv import load_dotenv
-from groq import Groq
-from ddgs import DDGS  
+import threading
+import time
 
-load_dotenv()
-api_key = os.getenv("GROQ_API_KEY")
-client = Groq(api_key=api_key) if api_key else None
+# --- CONFIGURATION ---
+SERIAL_PORT = '/dev/ttyUSB0'  # Adjust to your Pi's USB port (e.g., /dev/ttyACM0)
+BAUD_RATE = 115200
+OLLAMA_URL = "http://localhost:11434/api/generate"  # Local AI server endpoint
 
-PROMPT_FILE = "jarvis_prompt.txt"
-MEMORY_FILE = "jarvis_memory.json"
+# --- INITIALIZE AUDIO ENGINE ---
+tts_engine = pyttsx3.init()
+# Set Jarvis voice properties (Adjust speed and volume)
+tts_engine.setProperty('rate', 145) 
+tts_engine.setProperty('volume', 1.0)
 
-if os.path.exists(PROMPT_FILE):
-    with open(PROMPT_FILE, "r", encoding="utf-8") as f:
-        SYSTEM_PROMPT = f.read()
-else:
-    SYSTEM_PROMPT = (
-    "You are JARVIS, Tony Stark's impeccably British, deadpan, and fiercely loyal AI assistant. "
-    "Always address the user as 'sir' and speak with sharp, dry, cinematic sarcasm. "
-    "CRITICAL CONSTRAINT: You must be exceptionally brief. Your response must NEVER exceed "
-    "two short sentences under any circumstances. Avoid generic AI phrasing completely."
-)
+# Global variables for cross-thread data sharing
+latest_glove_data = {}
 
+def jarvis_speak(text):
+    """Makes the Raspberry Pi speak out loud."""
+    print(f"Jarvis: {text}")
+    tts_engine.say(text)
+    tts_engine.runAndWait()
 
-def load_conversation_memory():
-    if os.path.exists(MEMORY_FILE):
-        try:
-            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return []
-    return []
-
-def save_conversation_memory(memory_history):
-    trimmed_memory = memory_history[-6:]
-    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(trimmed_memory, f, indent=2)
-
-def encode_image_to_base64(image_path):
-    """Converts a local physical image file into a text string for the cloud API."""
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
-
-def search_the_web(query: str) -> str:
-    """Browses the live internet to get real-time facts, weather, news, or item prices."""
-    try:
-        print(f"🌐 [JARVIS LIVE SEARCHING THE WEB FOR: '{query}']")
-        with DDGS() as ddgs:
-            results = [r for r in ddgs.text(query, max_results=2)]
-            if results:
-                return "\n".join([f"Source: {r['title']} - {r['body']}" for r in results])
-    except Exception as e:
-        return f"Search link error: {str(e)}"
-    return "No live data found, sir."
-
-def process_command(user_speech):
-    """Routes voice queries cleanly by isolating tools from the conversational text loop."""
-    if not client:
-        return "CONVERSATION", "My cloud core interface link is offline, sir."
-        
-    command_clean = user_speech.lower().strip()
-    past_exchanges = load_conversation_memory()
+# --- STEP 1: GLOVE TELEMETRY PARSER (RUNS IN BACKGROUND) ---
+def parse_glove_stream():
+    """Background thread to read and parse the ESP32 data stream."""
+    global latest_glove_data
+    print(f"Connecting to smart glove on {SERIAL_PORT}...")
     
-    # ─── ROUTE 1: HARDWARE CAMERA LIVE REFRESH WINDOW ───
-    if any(k in command_clean for k in ["open camera", "activate lenses", "turn on video", "open cameras"]):
-        print("🤖 [JARVIS IS INITIALIZING OPTICAL CHANNELS]")
-        import vision
-        vision.activate_camera()  
-        return "CONVERSATION", "Optical array initialization complete. Lenses are broadcasting, sir."
-
-    # ─── ROUTE 2: MULTIMODAL SIGHT SNAPSHOT SCAN (AI HAT / CLOUD FALLBACK) ───
-    if any(k in command_clean for k in ["scan", "identify", "what is this", "look at"]):
-        print("🤖 [JARVIS TRIGGERING SIGHT SENSORS]")
-        import vision
-        image_name = "target_sight.jpg"
+    try:
+        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
+        ser.flush()
         
-        if vision.snapshot_item(image_name):
-            # PRO-TIP: Here we check if your Raspberry Pi AI HAT+ 2 handles local detection
-            if hasattr(vision, "HAS_AI_HAT") and vision.HAS_AI_HAT:
-                print("⚡ [PROCESSING LOCALLY VIA RASPBERRY PI AI HAT+ 2]")
-                local_results = vision.analyze_frame_with_hailo(image_name)
-                ai_reply = f"My local optical matrix detects: {local_results}, sir."
+        while True:
+            if ser.in_waiting > 0:
+                line = ser.readline().decode('utf-8').strip()
                 
-                past_exchanges.append({"role": "user", "content": user_speech})
-                past_exchanges.append({"role": "assistant", "content": ai_reply})
-                save_conversation_memory(past_exchanges)
-                return "CONVERSATION", ai_reply
-                
-            else:
-                # Cloud Fallback (Runs on your current laptop seamlessly)
-                print("☁️ [AI HAT OFFLINE - ROUTING VIA GROQ CLOUD RECEPTORS]")
-                base64_image = encode_image_to_base64(image_name)
-                messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-                messages.extend(past_exchanges)
-                messages.append({"role": "user", "content": [
-                    {"type": "text", "text": f"Analyze this image and answer my question: {user_speech}"},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                ]})
-                try:
-                    response = client.chat.completions.create(
-                        model="meta-llama/llama-4-scout-17b-16e-instruct", 
-                        messages=messages,
-                        max_tokens=120
-                    )
-                    if os.path.exists(image_name):
-                        os.remove(image_name)
-                    ai_reply = response.choices[0].message.content
-                    past_exchanges.append({"role": "user", "content": user_speech})
-                    past_exchanges.append({"role": "assistant", "content": ai_reply})
-                    save_conversation_memory(past_exchanges)
-                    return "CONVERSATION", ai_reply
-                except Exception as e:
-                    if os.path.exists(image_name):
-                        os.remove(image_name)
-                    print(f"⚠️ INTERNAL VISION ERROR CODE: {e}")
-                    return "CONVERSATION", "I'm having trouble compiling the image telemetry, sir."
+                # Expected stream format: Thumb,Index,Middle,Ring,Pinky|ax,ay,az|gx,gy,gz
+                if '|' in line:
+                    try:
+                        parts = line.split('|')
+                        fingers = [int(x) for x in parts[0].split(',')]
+                        accel = [int(x) for x in parts[1].split(',')]
+                        gyro = [int(x) for x in parts[2].split(',')]
+                        
+                        latest_glove_data = {
+                            "fingers": fingers,
+                            "accel": accel,
+                            "gyro": gyro,
+                            "gesture": detect_gesture(fingers, accel)
+                        }
+                    except (ValueError, IndexError):
+                        continue # Skip corrupted lines smoothly
+            time.sleep(0.01)
+    except Exception as e:
+        print(f"Glove connection offline: {e}")
 
-    # ─── ROUTE 3: PHYSICAL HARDWARE HIWONDER xARM 1S CONTROLLER ───
-    if any(k in command_clean for k in ["move", "wave", "pick up", "grab", "lift", "drop", "arm", "robot"]):
-        print("🦾 [JARVIS INTERCEPTING ROBOTIC ACTUATION COMMAND]")
+def detect_gesture(fingers, accel):
+    """Translates raw sensor telemetry into high-level gestures."""
+    # Example heuristic baseline: low analog numbers = fully bent
+    is_fist = all(f < 1500 for f in fingers)
+    is_flat = all(f > 3000 for f in fingers)
+    
+    if is_fist: return "CLOSED_FIST"
+    if is_flat: return "OPEN_PALM"
+    return "UNKNOWN"
+
+# --- STEP 2: LOCAL AI AI BRAIN PROCESSING ---
+def ask_jarvis_ai(prompt):
+    """Sends voice input and glove state to a local AI instance."""
+    g_state = latest_glove_data.get("gesture", "UNKNOWN")
+    f_state = latest_glove_data.get("fingers", [0,0,0,0,0])
+    
+    # Inject spatial awareness into Jarvis context
+    system_context = (
+        f"You are Jarvis, an advanced AI system. You are tracking the user's robotic arm glove. "
+        f"Current hand posture: {g_state}. Finger raw telemetry values: {f_state}. "
+        f"Keep responses ultra-short, technical, and helpful. Be concise like the movie character."
+    )
+    
+    payload = {
+        "model": "llama3", # Change to "mistral" or your local model
+        "prompt": f"{system_context}\nUser: {prompt}\nJarvis:",
+        "stream": False
+    }
+    
+    try:
+        response = requests.post(OLLAMA_URL, json=payload, timeout=15)
+        if response.status_code == 200:
+            return response.json().get("response", "System error processing response.")
+    except Exception:
+        return "Connection to my core cognitive mainframe failed, sir."
+
+# --- STEP 3: CONTINUOUS VOICE LISTENER LOOP ---
+def main_voice_loop():
+    """Listens for speech and routes commands."""
+    recognizer = sr.Recognizer()
+    microphone = sr.Microphone()
+    
+    with microphone as source:
+        recognizer.adjust_for_ambient_noise(source, duration=1)
+        
+    jarvis_speak("Online and operational, sir. Glove tracking initialized.")
+    
+    while True:
         try:
-            import robot_arm
-            # Pass the directive down to our arm module to process servo rotation scripts
-            arm_status = robot_arm.execute_movement(command_clean)
+            with microphone as source:
+                print("\nListening...")
+                audio = recognizer.listen(source, phrase_time_limit=5)
+                
+            print("Processing speech...")
+            user_input = recognizer.recognize_google(audio).lower()
+            print(f"You said: {user_input}")
             
-            # Feed the status back into Groq text so Jarvis can reply eloquently about what he did
-            user_speech = f"{user_speech} (Context Notes: The Hiwonder robotic arm execution status: {arm_status})"
-        except Exception as e:
-            print(f"⚠️ Robot Arm Module Communication Interrupted: {e}")
-            user_speech = f"{user_speech} (Context Notes: Robotic arm failed to execute due to system disconnect.)"
+            # Simple keyword intercept or full AI pass-through
+            if "jarvis" in user_input:
+                clean_prompt = user_input.replace("jarvis", "").strip()
+                
+                # Let Jarvis know if you're trying to execute an arm command via hand stance
+                if "arm" in clean_prompt or "hand" in clean_prompt:
+                    current_posture = latest_glove_data.get("gesture", "UNKNOWN")
+                    jarvis_speak(f"Current hand alignment is {current_posture}. Proceeding with system verification.")
+                else:
+                    # Query the local language model
+                    ai_reply = ask_jarvis_ai(clean_prompt)
+                    jarvis_speak(ai_reply)
+                    
+        except sr.UnknownValueError:
+            pass # Ignore unreadable room noise silently
+        except sr.RequestError:
+            print("Voice recognition API connectivity issue.")
 
-    # ─── ROUTE 4: ISOLATED HARDWARE CLOCK TOOL ───
-    if any(k in command_clean for k in ["time", "what time", "current date", "day is it"]):
-        print("🤖 [JARVIS READING PHYSICAL SYSTEM CLOCK ARRAY]")
-        real_time = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
-        user_speech = f"{user_speech} (Context Notes: The hardware motherboard clock reads exactly: {real_time})"
-
-    # ─── ROUTE 5: ISOLATED LIVE DUCKDUCKGO WEB BROWSER ───
-    if any(k in command_clean for k in ["weather", "price of", "stock price", "news about", "tomorrow's forecast"]):
-        web_facts = search_the_web(command_clean)
-        user_speech = f"{user_speech} (Context Notes: Live internet query data snippets gathered for you:\n{web_facts})"
-
-    # ─── ROUTE 6: STANDARD CHAT PIPELINE ───
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(past_exchanges)
-    messages.append({"role": "user", "content": user_speech})
+# --- START CENTRAL BRAIN RUNTIME ---
+if __name__ == "__main__":
+    # Launch glove tracking thread so it does not block voice listening
+    glove_thread = threading.Thread(target=parse_glove_stream, daemon=True)
+    glove_thread.start()
     
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=messages,
-            max_tokens=120
-        )
-        ai_reply = response.choices[0].message.content
-        
-        past_exchanges.append({"role": "user", "content": user_speech.split("(Context Notes:")[0].strip()})
-        past_exchanges.append({"role": "assistant", "content": ai_reply})
-        save_conversation_memory(past_exchanges)
-        
-        return "CONVERSATION", ai_reply
-
-    except Exception as e:
-        print(f"⚠️ Core Execution Error: {e}")
-        return "CONVERSATION", "Transmission lag is interrupting my dialogue loops, sir."
+    # Run the main Jarvis interface
+    main_voice_loop()
