@@ -3,3 +3,4 @@ __pycache__/
 *.onnx
 .env
 jarvis_memory.json
+config.py

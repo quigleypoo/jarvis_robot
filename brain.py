@@ -1,145 +1,202 @@
+"""
+brain.py — Jarvis core, with HUD integration and process_command wrapper.
+"""
+
 import serial
 import speech_recognition as sr
-import pyttsx3
 import requests
 import json
+from groq import Groq
 import threading
 import time
+import subprocess
+import sys
+import voice_output
+import spotify_control as spotify_handler
+
+from dotenv import load_dotenv
+load_dotenv()
+from hud_state    import write_state
+from hud_services import start_hud_services
 
 # --- CONFIGURATION ---
-SERIAL_PORT = '/dev/ttyUSB0'  # Adjust to your Pi's USB port (e.g., /dev/ttyACM0)
-BAUD_RATE = 115200
-OLLAMA_URL = "http://localhost:11434/api/generate"  # Local AI server endpoint
+SERIAL_PORT  = '/dev/ttyUSB0'
+BAUD_RATE    = 115200
+import os
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL   = "llama-3.1-8b-instant"
+groq_client  = Groq(api_key=GROQ_API_KEY)
 
-# --- INITIALIZE AUDIO ENGINE ---
-tts_engine = pyttsx3.init()
-# Set Jarvis voice properties (Adjust speed and volume)
-tts_engine.setProperty('rate', 145) 
-tts_engine.setProperty('volume', 1.0)
-
-# Global variables for cross-thread data sharing
 latest_glove_data = {}
 
-def jarvis_speak(text):
-    """Makes the Raspberry Pi speak out loud."""
-    print(f"Jarvis: {text}")
-    tts_engine.say(text)
-    tts_engine.runAndWait()
 
-# --- STEP 1: GLOVE TELEMETRY PARSER (RUNS IN BACKGROUND) ---
+# --- SPEAK ---
+def jarvis_speak(text, whisper=False):
+    print(f"Jarvis: {text}")
+    state = "whispering" if whisper else "speaking"
+    write_state({"jarvis_state": state})
+    voice_output.speak(text)
+    write_state({"jarvis_state": "idle"})
+
+
+# --- STEP 1: GLOVE TELEMETRY PARSER ---
 def parse_glove_stream():
-    """Background thread to read and parse the ESP32 data stream."""
     global latest_glove_data
     print(f"Connecting to smart glove on {SERIAL_PORT}...")
-    
     try:
         ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
         ser.flush()
-        
         while True:
             if ser.in_waiting > 0:
                 line = ser.readline().decode('utf-8').strip()
-                
-                # Expected stream format: Thumb,Index,Middle,Ring,Pinky|ax,ay,az|gx,gy,gz
                 if '|' in line:
                     try:
-                        parts = line.split('|')
+                        parts   = line.split('|')
                         fingers = [int(x) for x in parts[0].split(',')]
-                        accel = [int(x) for x in parts[1].split(',')]
-                        gyro = [int(x) for x in parts[2].split(',')]
-                        
+                        accel   = [int(x) for x in parts[1].split(',')]
+                        gyro    = [int(x) for x in parts[2].split(',')]
                         latest_glove_data = {
                             "fingers": fingers,
-                            "accel": accel,
-                            "gyro": gyro,
+                            "accel":   accel,
+                            "gyro":    gyro,
                             "gesture": detect_gesture(fingers, accel)
                         }
                     except (ValueError, IndexError):
-                        continue # Skip corrupted lines smoothly
+                        continue
             time.sleep(0.01)
     except Exception as e:
         print(f"Glove connection offline: {e}")
 
+
 def detect_gesture(fingers, accel):
-    """Translates raw sensor telemetry into high-level gestures."""
-    # Example heuristic baseline: low analog numbers = fully bent
     is_fist = all(f < 1500 for f in fingers)
     is_flat = all(f > 3000 for f in fingers)
-    
     if is_fist: return "CLOSED_FIST"
     if is_flat: return "OPEN_PALM"
     return "UNKNOWN"
 
-# --- STEP 2: LOCAL AI AI BRAIN PROCESSING ---
+
+# --- STEP 2: AI BRAIN ---
 def ask_jarvis_ai(prompt):
-    """Sends voice input and glove state to a local AI instance."""
     g_state = latest_glove_data.get("gesture", "UNKNOWN")
-    f_state = latest_glove_data.get("fingers", [0,0,0,0,0])
-    
-    # Inject spatial awareness into Jarvis context
-    system_context = (
-        f"You are Jarvis, an advanced AI system. You are tracking the user's robotic arm glove. "
-        f"Current hand posture: {g_state}. Finger raw telemetry values: {f_state}. "
-        f"Keep responses ultra-short, technical, and helpful. Be concise like the movie character."
-    )
-    
-    payload = {
-        "model": "llama3", # Change to "mistral" or your local model
-        "prompt": f"{system_context}\nUser: {prompt}\nJarvis:",
-        "stream": False
-    }
-    
+    f_state = latest_glove_data.get("fingers", [0, 0, 0, 0, 0])
+
     try:
-        response = requests.post(OLLAMA_URL, json=payload, timeout=15)
-        if response.status_code == 200:
-            return response.json().get("response", "System error processing response.")
-    except Exception:
+        with open("jarvis_prompt.txt", "r") as f:
+            personality = f.read().strip()
+    except FileNotFoundError:
+        personality = "You are Jarvis, Tony Stark's AI assistant. Be brief and call the user sir."
+
+    system_context = (
+        f"{personality}\n\n"
+        f"Context Notes: Current hand posture is {g_state}. Finger telemetry: {f_state}."
+    )
+
+    try:
+        response = groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": system_context},
+                {"role": "user",   "content": prompt}
+            ],
+            max_tokens=150,
+            temperature=0.7
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"Groq error: {e}")
         return "Connection to my core cognitive mainframe failed, sir."
 
-# --- STEP 3: CONTINUOUS VOICE LISTENER LOOP ---
+
+# --- STEP 3: PROCESS COMMAND (called by main.py) ---
+def process_command(text):
+    """
+    Entry point expected by main.py.
+    Returns an (action, speech_response) tuple.
+
+    Actions:
+      "ARM_COMMAND"   — physical arm/glove movement
+      "MUSIC_COMMAND" — Spotify control
+      "CONVERSATION"  — standard AI reply
+    """
+    write_state({"jarvis_state": "thinking"})
+    text = text.lower().strip()
+
+    # --- ARM / GLOVE COMMANDS ---
+    arm_keywords = ["arm", "grip", "fist", "open", "close", "move", "rotate", "grab", "release"]
+    if any(word in text for word in arm_keywords):
+        gesture  = latest_glove_data.get("gesture", "UNKNOWN")
+        fingers  = latest_glove_data.get("fingers", [0, 0, 0, 0, 0])
+        response = (
+            f"Current hand alignment is {gesture}. "
+            f"Finger telemetry reads {fingers}. Executing motor sequence."
+        )
+        write_state({"jarvis_state": "idle"})
+        return ("ARM_COMMAND", response)
+
+    # --- MUSIC COMMANDS ---
+    music_keywords = ["play", "pause", "resume", "skip", "next song", "stop the music"]
+    if any(word in text for word in music_keywords):
+        response = spotify_handler.handle_music_command(text)
+        write_state({"jarvis_state": "idle"})
+        return ("MUSIC_COMMAND", response)
+
+    # --- EVERYTHING ELSE → AI ---
+    response = ask_jarvis_ai(text)
+    write_state({"jarvis_state": "idle"})
+    return ("CONVERSATION", response)
+
+
+# --- STEP 4: STANDALONE VOICE LOOP (used if you run brain.py directly) ---
 def main_voice_loop():
-    """Listens for speech and routes commands."""
     recognizer = sr.Recognizer()
     microphone = sr.Microphone()
-    
+
     with microphone as source:
         recognizer.adjust_for_ambient_noise(source, duration=1)
-        
+
     jarvis_speak("Online and operational, sir. Glove tracking initialized.")
-    
+
     while True:
         try:
+            write_state({"jarvis_state": "listening"})
+
             with microphone as source:
                 print("\nListening...")
                 audio = recognizer.listen(source, phrase_time_limit=5)
-                
+
+            write_state({"jarvis_state": "thinking"})
             print("Processing speech...")
             user_input = recognizer.recognize_google(audio).lower()
             print(f"You said: {user_input}")
-            
-            # Simple keyword intercept or full AI pass-through
+
             if "jarvis" in user_input:
                 clean_prompt = user_input.replace("jarvis", "").strip()
-                
-                # Let Jarvis know if you're trying to execute an arm command via hand stance
-                if "arm" in clean_prompt or "hand" in clean_prompt:
-                    current_posture = latest_glove_data.get("gesture", "UNKNOWN")
-                    jarvis_speak(f"Current hand alignment is {current_posture}. Proceeding with system verification.")
-                else:
-                    # Query the local language model
-                    ai_reply = ask_jarvis_ai(clean_prompt)
-                    jarvis_speak(ai_reply)
-                    
+                action, reply = process_command(clean_prompt)
+                jarvis_speak(reply)
+            else:
+                write_state({"jarvis_state": "idle"})
+
         except sr.UnknownValueError:
-            pass # Ignore unreadable room noise silently
+            write_state({"jarvis_state": "idle"})
         except sr.RequestError:
             print("Voice recognition API connectivity issue.")
 
-# --- START CENTRAL BRAIN RUNTIME ---
+
+# --- MAIN RUNTIME (only runs if you launch brain.py directly) ---
 if __name__ == "__main__":
-    # Launch glove tracking thread so it does not block voice listening
+    hud_proc = subprocess.Popen(
+        [sys.executable, "hud_display.py"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+
+    start_hud_services()
+
     glove_thread = threading.Thread(target=parse_glove_stream, daemon=True)
     glove_thread.start()
-    
-    # Run the main Jarvis interface
-    main_voice_loop()
+
+    try:
+        main_voice_loop()
+    finally:
+        hud_proc.terminate()

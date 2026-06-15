@@ -21,13 +21,11 @@ def get_target_device_id(sp):
         devices_data = sp.devices().get("devices", [])
         if not devices_data:
             return None
-            
-        # 1. Look for a device that is currently active first
+
         for d in devices_data:
             if d.get("is_active"):
                 return d.get("id")
-                
-        # 2. If none are active, grab the ID of the first device in the list
+
         return devices_data[0].get("id")
     except Exception as err:
         print(f"[DEVICE LOOKUP ERR] {err}")
@@ -60,22 +58,32 @@ def handle_music_command(command_text):
 
         # --- SEARCH & PLAY TRACK ---
         elif "play" in cmd:
-            search_query = cmd.split("play")[-1].strip()
+            # Strip filler words so Spotify gets a clean search query
+            search_query = cmd.split("play", 1)[-1].strip()
+            filler = ["please", "for me", "right now", "the song", "a song called", "called", "titled"]
+            for word in filler:
+                search_query = search_query.replace(word, "").strip()
+
+            # Split "X by Y" into track + artist for a more precise search
+            if " by " in search_query:
+                parts = search_query.split(" by ", 1)
+                track_name  = parts[0].strip()
+                artist_name = parts[1].strip()
+                search_query = f"track:{track_name} artist:{artist_name}"
+
             if search_query:
                 results = sp.search(q=search_query, limit=1, type="track")
                 tracks = results.get("tracks", {}).get("items", [])
-                
+
                 if tracks:
-                    # FIX: Correctly extract keys from the first item index [0] of the list
-                    track_uri = tracks[0].get("uri")
-                    track_name = tracks[0].get("name")
+                    track_uri   = tracks[0].get("uri")
+                    track_name  = tracks[0].get("name")
                     artist_name = tracks[0]["artists"][0].get("name")
-                    
                     sp.start_playback(device_id=device_id, uris=[track_uri])
                     return f"Playing {track_name} by {artist_name}, sir."
-                
-                return f"I couldn't find any tracks matching '{search_query}' on Spotify."
-                
+
+                return f"I couldn't find that track on Spotify, sir."
+
     except Exception as e:
         print(f"[SPOTIFY EXECUTION ERROR] {e}")
         return "I can't see your player, sir. Please play a track on your app manually to link us."
