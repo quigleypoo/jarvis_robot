@@ -8,3 +8,6 @@ config.py
 venv/
 *.bin
 jarvis_hud_state.json
+*.pt
+*.onnx.1
+
