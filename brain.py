@@ -1,7 +1,7 @@
 """
 brain.py — Jarvis core, with HUD integration and process_command wrapper.
 """
-
+import os
 import serial
 import speech_recognition as sr
 import requests
@@ -15,7 +15,8 @@ import voice_output
 import spotify_control as spotify_handler
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
+print(f"DEBUG KEY: {os.getenv('GROQ_API_KEY')}")
 from hud_state    import write_state
 from hud_services import start_hud_services
 

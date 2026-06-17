@@ -1,13 +1,13 @@
 import os
 import numpy as np
 import sounddevice as sd
-
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # ─── NEURAL SYNTHESIS SYSTEM ARCHITECTURE ───
 try:
-    from kokoro_onnx import KokoroOnnx
+    from kokoro_onnx import Kokoro
     # Validates that your offline weight matrix files are stored in the project directory
     if os.path.exists("kokoro-v0_19.onnx") and os.path.exists("voices.bin"):
-        kokoro = KokoroOnnx("kokoro-v0_19.onnx", "voices.bin")
+        kokoro = Kokoro(MODEL_PATH, VOICES_PATH)
     else:
         kokoro = None
         print("⚠️ Kokoro weight assets are missing from the current folder directory.")
