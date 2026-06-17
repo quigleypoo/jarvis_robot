@@ -13,6 +13,8 @@ import subprocess
 import sys
 import voice_output
 import spotify_control as spotify_handler
+import computer_control
+import alarm_briefing
 
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
@@ -141,6 +143,25 @@ def process_command(text):
         response = spotify_handler.handle_music_command(text)
         write_state({"jarvis_state": "idle"})
         return ("MUSIC_COMMAND", response)
+
+# --- ALARM & BRIEFING COMMANDS ---
+    alarm_keywords = ["alarm", "briefing", "wake me"]
+    if any(word in text for word in alarm_keywords):
+        handled, response = alarm_briefing.handle_alarm_command(text, speak_fn=jarvis_speak)
+        if handled:
+            write_state({"jarvis_state": "idle"})
+            if response:
+                return ("ALARM_COMMAND", response)
+
+# --- COMPUTER CONTROL COMMANDS ---
+    computer_keywords = ["open", "launch", "screenshot", "volume", "mute",
+                         "search for", "search", "look up", "google", "louder",
+                         "quieter", "find me", "show me"]
+    if any(word in text for word in computer_keywords):
+        result = computer_control.handle_computer_command(text)
+        if result:
+            write_state({"jarvis_state": "idle"})
+            return ("COMPUTER_COMMAND", result)
 
     # --- EVERYTHING ELSE → AI ---
     response = ask_jarvis_ai(text)
