@@ -4,3 +4,7 @@ __pycache__/
 .env
 jarvis_memory.json
 config.py
+*.pyc
+venv/
+*.bin
+jarvis_hud_state.json
